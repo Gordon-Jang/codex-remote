@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Codex Remote</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <section id="loginView" class="login-panel">
+        <div>
+          <h1>Codex Remote</h1>
+          <p>输入本机服务 token 后进入控制台。</p>
+        </div>
+        <form id="loginForm" class="login-form">
+          <label for="tokenInput">Token</label>
+          <input id="tokenInput" name="token" type="password" autocomplete="current-password" required>
+          <button type="submit">进入</button>
+          <p id="loginError" class="error" role="alert"></p>
+        </form>
+      </section>
+
+      <section id="appView" class="app-view" hidden>
+        <header class="topbar">
+          <div>
+            <h1>Codex Remote</h1>
+            <p id="statusLine">连接中...</p>
+          </div>
+          <button id="logoutButton" type="button">退出</button>
+        </header>
+
+        <nav class="tabs" aria-label="视图">
+          <button class="tab active" data-tab="run" type="button">执行</button>
+          <button class="tab" data-tab="sessions" type="button">会话</button>
+          <button class="tab" data-tab="desktop" type="button">桌面桥</button>
+          <button class="tab" data-tab="security" type="button">安全</button>
+        </nav>
+
+        <section id="runPanel" class="panel active">
+          <form id="jobForm" class="job-form">
+            <label for="promptInput">远程指令</label>
+            <textarea id="promptInput" rows="7" placeholder="输入要让本机 Agent 执行的任务"></textarea>
+            <label for="workspaceInput">工作目录</label>
+            <input id="workspaceInput" type="text">
+            <button type="submit">发送任务</button>
+          </form>
+          <div class="jobs-layout">
+            <aside>
+              <h2>任务</h2>
+              <div id="jobList" class="list"></div>
+            </aside>
+            <section class="log-panel">
+              <h2>输出</h2>
+              <pre id="jobLog"></pre>
+            </section>
+          </div>
+        </section>
+
+        <section id="sessionsPanel" class="panel">
+          <div class="section-head">
+            <div>
+              <h2>本机 Codex 会话</h2>
+              <p>只读预览，不写入 App 内部状态。</p>
+            </div>
+            <button id="refreshSessionsButton" type="button">刷新</button>
+          </div>
+          <div class="sessions-layout">
+            <div id="sessionList" class="list"></div>
+            <article class="session-detail">
+              <h3 id="sessionTitle">选择一个会话</h3>
+              <p id="sessionMeta"></p>
+              <pre id="sessionPreview"></pre>
+            </article>
+          </div>
+        </section>
+
+        <section id="desktopPanel" class="panel">
+          <div class="desktop-layout">
+            <section class="desktop-controls">
+              <h2>Codex 桌面</h2>
+              <label for="desktopPasteInput">粘贴文本</label>
+              <textarea id="desktopPasteInput" rows="8" placeholder="输入要粘贴到 Codex 的文本"></textarea>
+              <div class="button-row">
+                <button id="desktopFocusButton" type="button">聚焦 Codex</button>
+                <button id="desktopPasteButton" type="button">粘贴到 Codex</button>
+                <button id="desktopSendButton" class="danger" type="button">发送 Enter</button>
+              </div>
+              <p id="desktopStatus" class="item-meta" role="status"></p>
+            </section>
+            <section class="screenshot-panel">
+              <div class="section-head">
+                <h2>实时截图</h2>
+                <button id="desktopScreenshotButton" type="button">刷新截图</button>
+              </div>
+              <label class="toggle-row" for="desktopClickModeInput">
+                <input id="desktopClickModeInput" type="checkbox">
+                <span>点击截图操作 Codex</span>
+              </label>
+              <div class="screenshot-frame">
+                <img id="desktopScreenshot" alt="Codex window screenshot" hidden>
+                <div id="desktopScreenshotEmpty" class="item-meta">暂无截图</div>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section id="securityPanel" class="panel">
+          <h2>暴露到公网前检查</h2>
+          <ul class="checklist">
+            <li>服务监听在 <code>127.0.0.1</code>，只把隧道指向本端口。</li>
+            <li>使用高强度 <code>CODEX_REMOTE_TOKEN</code>，不要放进截图或聊天记录。</li>
+            <li>默认 runner 是 <code>mock</code>，不会执行系统命令。</li>
+            <li>需要真正执行任务时，用一个受限 wrapper 接 <code>CODEX_REMOTE_RUNNER=command</code>。</li>
+            <li>Codex App 会话目录只读展示，不做内部数据库写入。</li>
+          </ul>
+        </section>
+      </section>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>

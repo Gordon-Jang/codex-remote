@@ -1,0 +1,14 @@
+{
+  "name": "codex-remote",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Secure local web console for browsing Codex sessions and running remote tasks.",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0"
+  },
+  "devDependencies": {}
+}
