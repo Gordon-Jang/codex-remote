@@ -22,15 +22,19 @@ Do not commit `.env`, screenshots, runtime files, tunnel logs, or generated tool
 
 ## One-Click Windows Control
 
-On Windows, double-click `CodexRemote-Control.bat` and choose from the menu:
+On Windows, double-click `CodexRemote-Control.bat` to start everything directly:
 
-- `1` starts the local service and Cloudflare Quick Tunnel.
-- `2` stops the local service and this project's Quick Tunnel.
-- `3` shows status without printing the token value.
-- `4` opens the saved public URL, or the local URL if no public URL is saved.
-- `5` opens the project folder.
+- Starts or reuses the local service.
+- Starts or reuses Cloudflare Quick Tunnel.
+- Checks whether the saved public URL is reachable.
+- Restarts this project's Quick Tunnel if the old `trycloudflare.com` URL expired.
+- Shows the local URL, public URL, and token status without printing the token value.
 
-The menu preserves an existing `.env` token. It generates a token only when `.env` is missing or `CODEX_REMOTE_TOKEN` is empty.
+The script preserves an existing `.env` token. It generates a token only when `.env` is missing or `CODEX_REMOTE_TOKEN` is empty. To stop the service manually, run:
+
+```powershell
+.\manage-codex-remote.ps1 -Action stop
+```
 
 ## Start Locally
 
@@ -57,6 +61,25 @@ For temporary account-free HTTPS access:
 ```
 
 The script prints a temporary `https://*.trycloudflare.com` URL and writes it to `runtime\quick-tunnel-url.txt`. Quick Tunnel URLs are not stable across tunnel restarts. For long-term use, create a named Cloudflare Tunnel or use another trusted private networking option.
+
+## Interactive Terminal
+
+The Run tab includes an authenticated terminal bridge. On Windows it defaults to:
+
+```text
+cmd.exe /Q /K "chcp 65001>nul"
+```
+
+Start the terminal from the web UI, then send commands to the local process. This can launch local CLI agents such as `claude`, `codex`, `gemini`, or a trusted wrapper script if those commands are already installed and available in `PATH`.
+
+You can override the terminal process in `.env`:
+
+```text
+CODEX_REMOTE_TERMINAL_COMMAND=cmd.exe
+CODEX_REMOTE_TERMINAL_ARGS=/Q /K "chcp 65001>nul"
+```
+
+Do not expose this through a public tunnel unless the token is strong and private. The terminal bridge can control the local machine as the current Windows user.
 
 ## Runners
 

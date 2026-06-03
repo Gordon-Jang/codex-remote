@@ -39,6 +39,28 @@
         </nav>
 
         <section id="runPanel" class="panel active">
+          <section class="terminal-panel">
+            <div class="section-head">
+              <div>
+                <h2>终端</h2>
+                <p id="terminalStatus">终端未启动</p>
+              </div>
+              <div class="button-row">
+                <button id="terminalStartButton" type="button">启动终端</button>
+                <button id="terminalStopButton" class="danger" type="button">停止终端</button>
+                <button id="terminalClearButton" class="secondary" type="button">清屏</button>
+              </div>
+            </div>
+            <label for="terminalWorkspaceInput">终端工作目录</label>
+            <input id="terminalWorkspaceInput" type="text">
+            <pre id="terminalLog" class="terminal-log"></pre>
+            <form id="terminalForm" class="terminal-form">
+              <label for="terminalInput">发送到终端</label>
+              <textarea id="terminalInput" rows="4" placeholder="输入 cmd 命令，或启动 claude / codex / 其他本地 CLI"></textarea>
+              <button type="submit">发送到终端</button>
+            </form>
+          </section>
+
           <form id="jobForm" class="job-form">
             <label for="promptInput">远程指令</label>
             <textarea id="promptInput" rows="7" placeholder="输入要让本机 Agent 执行的任务"></textarea>

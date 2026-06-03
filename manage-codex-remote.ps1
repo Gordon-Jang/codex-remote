@@ -209,6 +209,29 @@ function Get-TunnelUrlFromLogs {
     return $null
 }
 
+function Test-TunnelUrl {
+    param([string]$Url)
+    if ([string]::IsNullOrWhiteSpace($Url)) {
+        return $false
+    }
+
+    $baseUrl = $Url.TrimEnd("/")
+    try {
+        $response = Invoke-WebRequest -Uri "$baseUrl/api/health" -TimeoutSec 15 -MaximumRedirection 3 -UseBasicParsing
+        if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 500) {
+            return $true
+        }
+    } catch {
+    }
+
+    try {
+        $response = Invoke-WebRequest -Uri $baseUrl -TimeoutSec 15 -MaximumRedirection 3 -UseBasicParsing
+        return ($response.StatusCode -ge 200 -and $response.StatusCode -lt 500)
+    } catch {
+        return $false
+    }
+}
+
 function Wait-ForLocalService {
     for ($i = 0; $i -lt 20; $i++) {
         $listener = Get-LocalListener
@@ -279,13 +302,17 @@ function Start-QuickTunnel {
             }
         }
 
-        Write-Host "Cloudflare Quick Tunnel already running (PID $($existing.Id))."
-        if ($url) {
+        if ($url -and (Test-TunnelUrl $url)) {
+            Write-Host "Cloudflare Quick Tunnel already running (PID $($existing.Id))."
             Write-Host "Public URL: $url"
-        } else {
-            Write-Host "Public URL not found yet. Check cloudflared.err.log."
+            return $url
         }
-        return $url
+
+        Write-Host "Existing Cloudflare Quick Tunnel is not publicly reachable. Restarting tunnel..."
+        foreach ($process in @(Get-ProjectCloudflaredProcesses)) {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        }
+        Start-Sleep -Seconds 1
     }
 
     if (Test-Path -LiteralPath $CloudflaredOut) { Remove-Item -LiteralPath $CloudflaredOut -Force }
@@ -295,6 +322,9 @@ function Start-QuickTunnel {
     Start-Process -FilePath $Cloudflared -ArgumentList @("tunnel", "--url", $LocalUrl, "--no-autoupdate") -WorkingDirectory $Root -RedirectStandardOutput $CloudflaredOut -RedirectStandardError $CloudflaredErr -WindowStyle Hidden | Out-Null
 
     $url = Wait-ForTunnelUrl
+    if (-not (Test-TunnelUrl $url)) {
+        throw "Cloudflare Quick Tunnel URL was created but is not publicly reachable yet: $url"
+    }
     Write-Host "Public URL: $url"
     return $url
 }

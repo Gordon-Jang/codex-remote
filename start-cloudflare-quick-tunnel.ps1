@@ -39,21 +39,63 @@ $Existing = Get-Process cloudflared -ErrorAction SilentlyContinue |
     Where-Object { $_.Path -eq $Cloudflared } |
     Select-Object -First 1
 
-if (-not $Existing) {
+function Read-FileBestEffort {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return "" }
+    try { return Get-Content -LiteralPath $Path -Raw -ErrorAction Stop } catch { return "" }
+}
+
+function Get-TunnelUrlFromLogs {
+    $Text = (Read-FileBestEffort $CloudflaredOut) + "`n" + (Read-FileBestEffort $CloudflaredErr)
+    $Matches = [regex]::Matches($Text, "https://[a-z0-9-]+\.trycloudflare\.com")
+    if ($Matches.Count -gt 0) { return $Matches[$Matches.Count - 1].Value }
+    return $null
+}
+
+function Test-TunnelUrl {
+    param([string]$Url)
+    if ([string]::IsNullOrWhiteSpace($Url)) { return $false }
+    $BaseUrl = $Url.TrimEnd("/")
+    try {
+        $Response = Invoke-WebRequest -Uri "$BaseUrl/api/health" -TimeoutSec 15 -MaximumRedirection 3 -UseBasicParsing
+        return ($Response.StatusCode -ge 200 -and $Response.StatusCode -lt 500)
+    } catch {
+        return $false
+    }
+}
+
+if ($Existing) {
+    $ExistingUrl = $null
+    if (Test-Path -LiteralPath $UrlFile) {
+        $ExistingUrl = (Get-Content -LiteralPath $UrlFile -Raw -ErrorAction SilentlyContinue).Trim()
+    }
+    if (-not $ExistingUrl) {
+        $ExistingUrl = Get-TunnelUrlFromLogs
+    }
+    if ($ExistingUrl -and (Test-TunnelUrl $ExistingUrl)) {
+        $ExistingUrl | Set-Content -LiteralPath $UrlFile -Encoding UTF8
+        Write-Host $ExistingUrl
+        exit 0
+    }
+
+    Stop-Process -Id $Existing.Id -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
+}
+
+if (-not (Get-Process cloudflared -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $Cloudflared } | Select-Object -First 1)) {
     if (Test-Path -LiteralPath $CloudflaredOut) { Remove-Item -LiteralPath $CloudflaredOut -Force }
     if (Test-Path -LiteralPath $CloudflaredErr) { Remove-Item -LiteralPath $CloudflaredErr -Force }
     Start-Process -FilePath $Cloudflared -ArgumentList @("tunnel", "--url", "http://127.0.0.1:8765", "--no-autoupdate") -WorkingDirectory $Root -RedirectStandardOutput $CloudflaredOut -RedirectStandardError $CloudflaredErr -WindowStyle Hidden | Out-Null
 }
 
 for ($i = 0; $i -lt 60; $i++) {
-    $Text = ""
-    if (Test-Path -LiteralPath $CloudflaredOut) { $Text += Get-Content -LiteralPath $CloudflaredOut -Raw }
-    if (Test-Path -LiteralPath $CloudflaredErr) { $Text += "`n" + (Get-Content -LiteralPath $CloudflaredErr -Raw) }
-
-    $Match = [regex]::Match($Text, "https://[a-z0-9-]+\.trycloudflare\.com")
-    if ($Match.Success) {
-        $Match.Value | Set-Content -LiteralPath $UrlFile -Encoding UTF8
-        Write-Host $Match.Value
+    $Url = Get-TunnelUrlFromLogs
+    if ($Url) {
+        if (-not (Test-TunnelUrl $Url)) {
+            throw "Cloudflare Quick Tunnel URL was created but is not publicly reachable yet: $Url"
+        }
+        $Url | Set-Content -LiteralPath $UrlFile -Encoding UTF8
+        Write-Host $Url
         exit 0
     }
     Start-Sleep -Seconds 1

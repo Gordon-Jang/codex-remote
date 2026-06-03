@@ -20,6 +20,7 @@ const screenshotsDir = path.join(runtimeDir, "screenshots");
 const desktopBridgeScript = path.join(process.cwd(), "scripts", "desktop-bridge.ps1");
 const desktopBridgeAvailable = process.platform === "win32";
 const jobs = new Map();
+const terminalSessions = new Map();
 
 app.disable("x-powered-by");
 app.use(express.json({ limit: "256kb" }));
@@ -62,6 +63,7 @@ app.get("/api/status", async (_req, res) => {
   res.json({
     codexHome,
     runner: process.env.CODEX_REMOTE_RUNNER || "mock",
+    terminal: getTerminalConfig().display,
     sessionsReadable: await exists(sessionsDir),
     archivedReadable: await exists(archivedDir),
     desktopBridgeAvailable,
@@ -181,7 +183,107 @@ app.get("/api/jobs/:id/events", (req, res) => {
   req.on("close", () => app.offJobUpdate(listener));
 });
 
+app.get("/api/terminal", (_req, res) => {
+  res.json({
+    config: getTerminalConfig(),
+    sessions: Array.from(terminalSessions.values()).map(publicTerminalSession).sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+  });
+});
+
+app.post("/api/terminal/start", (req, res) => {
+  const runningSession = Array.from(terminalSessions.values()).find((session) => session.status === "running");
+  if (runningSession) {
+    return res.status(200).json({ session: publicTerminalSession(runningSession) });
+  }
+
+  const workspace = String(req.body?.workspace || process.cwd()).trim() || process.cwd();
+  const resolvedWorkspace = path.resolve(workspace);
+  if (!fs.existsSync(resolvedWorkspace) || !fs.statSync(resolvedWorkspace).isDirectory()) {
+    return res.status(400).json({ error: "Workspace must be an existing directory" });
+  }
+
+  const config = getTerminalConfig();
+  if (!config.enabled) {
+    return res.status(503).json({ error: "Terminal command is not configured" });
+  }
+
+  const session = createTerminalSession(resolvedWorkspace, config);
+  terminalSessions.set(session.id, session);
+  startTerminalProcess(session);
+  res.status(202).json({ session: publicTerminalSession(session) });
+});
+
+app.get("/api/terminal/:id", (req, res) => {
+  const session = terminalSessions.get(req.params.id);
+  if (!session) {
+    return res.status(404).json({ error: "Terminal session not found" });
+  }
+  res.json({ session: publicTerminalSession(session) });
+});
+
+app.get("/api/terminal/:id/events", (req, res) => {
+  const session = terminalSessions.get(req.params.id);
+  if (!session) {
+    return res.status(404).end();
+  }
+  res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders?.();
+
+  sendEvent(res, "snapshot", publicTerminalSession(session));
+  const listener = (changedSession) => {
+    if (changedSession.id === session.id) {
+      sendEvent(res, "snapshot", publicTerminalSession(changedSession));
+    }
+  };
+  terminalListeners.add(listener);
+  req.on("close", () => terminalListeners.delete(listener));
+});
+
+app.post("/api/terminal/:id/input", (req, res) => {
+  const session = terminalSessions.get(req.params.id);
+  if (!session) {
+    return res.status(404).json({ error: "Terminal session not found" });
+  }
+  if (session.status !== "running" || !session.child || session.child.stdin.destroyed) {
+    return res.status(409).json({ error: "Terminal session is not running" });
+  }
+
+  const text = String(req.body?.text || "");
+  if (!text) {
+    return res.status(400).json({ error: "Input is required" });
+  }
+  if (text.length > 12000) {
+    return res.status(400).json({ error: "Input is too long" });
+  }
+
+  session.child.stdin.write(text);
+  appendTerminalLog(session, "stdin", text);
+  res.json({ session: publicTerminalSession(session) });
+});
+
+app.post("/api/terminal/:id/clear", (req, res) => {
+  const session = terminalSessions.get(req.params.id);
+  if (!session) {
+    return res.status(404).json({ error: "Terminal session not found" });
+  }
+  session.logs = [];
+  appendTerminalLog(session, "system", "Output cleared.");
+  res.json({ session: publicTerminalSession(session) });
+});
+
+app.post("/api/terminal/:id/stop", (req, res) => {
+  const session = terminalSessions.get(req.params.id);
+  if (!session) {
+    return res.status(404).json({ error: "Terminal session not found" });
+  }
+  stopTerminalSession(session);
+  res.json({ session: publicTerminalSession(session) });
+});
+
 const listeners = new Set();
+const terminalListeners = new Set();
 app.onJobUpdate = (listener) => listeners.add(listener);
 app.offJobUpdate = (listener) => listeners.delete(listener);
 
@@ -621,6 +723,188 @@ function spawnForJob(job, command, args, extraEnv) {
     job.status = code === 0 ? "completed" : "failed";
     touchJob(job);
   });
+}
+
+function getTerminalConfig() {
+  const command = process.env.CODEX_REMOTE_TERMINAL_COMMAND || process.env.CODEX_REMOTE_AGENT_COMMAND || defaultTerminalCommand();
+  const argsValue = process.env.CODEX_REMOTE_TERMINAL_ARGS || process.env.CODEX_REMOTE_AGENT_ARGS || "";
+  const args = argsValue ? splitCommandLine(argsValue) : defaultTerminalArgs(command);
+  return {
+    enabled: Boolean(command),
+    command,
+    args,
+    display: [command, ...args].filter(Boolean).join(" ")
+  };
+}
+
+function defaultTerminalCommand() {
+  if (process.platform === "win32") {
+    return "cmd.exe";
+  }
+  return process.env.SHELL || "";
+}
+
+function defaultTerminalArgs(command) {
+  if (process.platform === "win32" && path.basename(command).toLowerCase() === "cmd.exe") {
+    return ["/Q", "/K", "chcp 65001>nul"];
+  }
+  return [];
+}
+
+function splitCommandLine(value) {
+  const args = [];
+  let current = "";
+  let quote = "";
+  let escaped = false;
+
+  for (const char of String(value)) {
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = "";
+      } else {
+        current += char;
+      }
+      continue;
+    }
+    if (char === "\"" || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (current) {
+        args.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += char;
+  }
+
+  if (escaped) {
+    current += "\\";
+  }
+  if (current) {
+    args.push(current);
+  }
+  return args;
+}
+
+function createTerminalSession(workspace, config) {
+  const now = new Date().toISOString();
+  return {
+    id: crypto.randomUUID(),
+    command: config.command,
+    args: config.args,
+    workspace,
+    status: "starting",
+    exitCode: null,
+    createdAt: now,
+    updatedAt: now,
+    logs: [],
+    child: null
+  };
+}
+
+function startTerminalProcess(session) {
+  appendTerminalLog(session, "system", `Starting terminal: ${[session.command, ...session.args].join(" ")}`);
+  appendTerminalLog(session, "system", `Workspace: ${session.workspace}`);
+
+  try {
+    const child = spawn(session.command, session.args, {
+      cwd: session.workspace,
+      env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1" },
+      shell: false,
+      windowsHide: true
+    });
+    session.child = child;
+    session.status = "running";
+    touchTerminalSession(session);
+
+    child.stdout.on("data", (chunk) => appendTerminalLog(session, "stdout", chunk.toString("utf8")));
+    child.stderr.on("data", (chunk) => appendTerminalLog(session, "stderr", chunk.toString("utf8")));
+    child.on("error", (error) => {
+      appendTerminalLog(session, "stderr", error.message);
+      session.status = "failed";
+      touchTerminalSession(session);
+    });
+    child.on("close", (code) => {
+      appendTerminalLog(session, "system", `Terminal exited with code ${code}`);
+      session.exitCode = code;
+      if (session.status !== "stopped") {
+        session.status = code === 0 ? "completed" : "failed";
+      }
+      session.child = null;
+      touchTerminalSession(session);
+    });
+  } catch (error) {
+    appendTerminalLog(session, "stderr", error.message);
+    session.status = "failed";
+    touchTerminalSession(session);
+  }
+}
+
+function stopTerminalSession(session) {
+  if (session.status !== "running" || !session.child) {
+    session.status = session.status === "starting" ? "stopped" : session.status;
+    touchTerminalSession(session);
+    return;
+  }
+
+  appendTerminalLog(session, "system", "Stopping terminal.");
+  session.status = "stopped";
+  const pid = session.child.pid;
+  if (process.platform === "win32" && pid) {
+    const killer = spawn("taskkill.exe", ["/PID", String(pid), "/T", "/F"], {
+      windowsHide: true
+    });
+    killer.on("error", () => session.child?.kill());
+  } else {
+    session.child.kill("SIGTERM");
+  }
+  touchTerminalSession(session);
+}
+
+function appendTerminalLog(session, stream, text) {
+  const entry = {
+    time: new Date().toISOString(),
+    stream,
+    text: String(text).slice(0, 16000)
+  };
+  session.logs.push(entry);
+  if (session.logs.length > 1000) {
+    session.logs.splice(0, session.logs.length - 1000);
+  }
+  touchTerminalSession(session);
+}
+
+function touchTerminalSession(session) {
+  session.updatedAt = new Date().toISOString();
+  for (const listener of terminalListeners) {
+    listener(session);
+  }
+}
+
+function publicTerminalSession(session) {
+  return {
+    id: session.id,
+    command: session.command,
+    args: session.args,
+    workspace: session.workspace,
+    status: session.status,
+    exitCode: session.exitCode,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+    logs: session.logs
+  };
 }
 
 function appendLog(job, stream, text) {

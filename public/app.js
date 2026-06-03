@@ -3,6 +3,9 @@ const state = {
   activeJobId: "",
   eventSource: null,
   jobPollTimer: null,
+  terminalSessionId: "",
+  terminalEventSource: null,
+  terminalPollTimer: null,
   desktopObjectUrl: ""
 };
 
@@ -24,6 +27,14 @@ const el = {
   jobForm: document.querySelector("#jobForm"),
   promptInput: document.querySelector("#promptInput"),
   workspaceInput: document.querySelector("#workspaceInput"),
+  terminalForm: document.querySelector("#terminalForm"),
+  terminalInput: document.querySelector("#terminalInput"),
+  terminalLog: document.querySelector("#terminalLog"),
+  terminalStatus: document.querySelector("#terminalStatus"),
+  terminalWorkspaceInput: document.querySelector("#terminalWorkspaceInput"),
+  terminalStartButton: document.querySelector("#terminalStartButton"),
+  terminalStopButton: document.querySelector("#terminalStopButton"),
+  terminalClearButton: document.querySelector("#terminalClearButton"),
   jobList: document.querySelector("#jobList"),
   jobLog: document.querySelector("#jobLog"),
   refreshSessionsButton: document.querySelector("#refreshSessionsButton"),
@@ -67,7 +78,9 @@ el.logoutButton.addEventListener("click", () => {
   localStorage.removeItem("codexRemoteToken");
   state.authValue = "";
   if (state.eventSource) state.eventSource.close();
+  if (state.terminalEventSource) state.terminalEventSource.close();
   stopJobPolling();
+  stopTerminalPolling();
   showLogin();
 });
 
@@ -97,6 +110,17 @@ el.jobForm.addEventListener("submit", async (event) => {
   selectJob(data.job.id);
 });
 
+el.terminalStartButton.addEventListener("click", startTerminal);
+el.terminalStopButton.addEventListener("click", stopTerminal);
+el.terminalClearButton.addEventListener("click", clearTerminal);
+el.terminalForm.addEventListener("submit", sendTerminalInput);
+el.terminalInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+    event.preventDefault();
+    el.terminalForm.requestSubmit();
+  }
+});
+
 el.refreshSessionsButton.addEventListener("click", loadSessions);
 el.desktopFocusButton.addEventListener("click", focusCodexWindow);
 el.desktopPasteButton.addEventListener("click", pasteToCodexWindow);
@@ -117,11 +141,12 @@ if (state.authValue) {
 async function bootApp() {
   const statusResponse = await apiFetch("/api/status");
   const status = await statusResponse.json();
-  el.statusLine.textContent = `Runner: ${status.runner} | Codex Home: ${status.codexHome}`;
+  el.statusLine.textContent = `Runner: ${status.runner} | Terminal: ${status.terminal || "not configured"} | Codex Home: ${status.codexHome}`;
   el.workspaceInput.value = guessWorkspace();
+  el.terminalWorkspaceInput.value = guessWorkspace();
   el.loginView.hidden = true;
   el.appView.hidden = false;
-  await Promise.all([loadJobs(), loadSessions(), loadDesktopStatus()]);
+  await Promise.all([loadJobs(), loadTerminal(), loadSessions(), loadDesktopStatus()]);
 }
 
 function showLogin() {
@@ -137,6 +162,146 @@ function showTab(name) {
   for (const [key, panel] of Object.entries(el.panels)) {
     panel.classList.toggle("active", key === name);
   }
+}
+
+async function loadTerminal() {
+  const response = await apiFetch("/api/terminal");
+  const data = await response.json();
+  const running = data.sessions.find((session) => session.status === "running");
+  const latest = running || data.sessions[0];
+  if (latest) {
+    selectTerminal(latest.id);
+    return;
+  }
+  renderTerminal({
+    status: "stopped",
+    workspace: el.terminalWorkspaceInput.value,
+    logs: []
+  });
+}
+
+async function startTerminal() {
+  setTerminalStatus("正在启动终端...");
+  const response = await apiFetch("/api/terminal/start", {
+    method: "POST",
+    body: JSON.stringify({
+      workspace: el.terminalWorkspaceInput.value.trim()
+    })
+  });
+  const data = await response.json();
+  await selectTerminal(data.session.id);
+}
+
+async function selectTerminal(id) {
+  state.terminalSessionId = id;
+  if (state.terminalEventSource) state.terminalEventSource.close();
+  stopTerminalPolling();
+  const response = await apiFetch(`/api/terminal/${encodeURIComponent(id)}`);
+  const data = await response.json();
+  renderTerminal(data.session);
+  if (shouldPollJobs()) {
+    startTerminalPolling(id);
+    return;
+  }
+  state.terminalEventSource = new EventSource(`/api/terminal/${encodeURIComponent(id)}/events`);
+  state.terminalEventSource.addEventListener("snapshot", (event) => {
+    renderTerminal(JSON.parse(event.data));
+  });
+  state.terminalEventSource.addEventListener("error", () => startTerminalPolling(id));
+}
+
+async function sendTerminalInput(event) {
+  event.preventDefault();
+  const text = el.terminalInput.value;
+  if (!text.trim()) return;
+  if (!state.terminalSessionId) {
+    await startTerminal();
+  }
+  const payload = text.endsWith("\n") ? text : `${text}\n`;
+  const response = await apiFetch(`/api/terminal/${encodeURIComponent(state.terminalSessionId)}/input`, {
+    method: "POST",
+    body: JSON.stringify({ text: payload })
+  });
+  const data = await response.json();
+  el.terminalInput.value = "";
+  renderTerminal(data.session);
+}
+
+async function stopTerminal() {
+  if (!state.terminalSessionId) return;
+  const response = await apiFetch(`/api/terminal/${encodeURIComponent(state.terminalSessionId)}/stop`, {
+    method: "POST"
+  });
+  const data = await response.json();
+  renderTerminal(data.session);
+}
+
+async function clearTerminal() {
+  if (!state.terminalSessionId) {
+    el.terminalLog.textContent = "";
+    return;
+  }
+  const response = await apiFetch(`/api/terminal/${encodeURIComponent(state.terminalSessionId)}/clear`, {
+    method: "POST"
+  });
+  const data = await response.json();
+  renderTerminal(data.session);
+}
+
+function renderTerminal(session) {
+  const status = session.status || "stopped";
+  const workspace = session.workspace || el.terminalWorkspaceInput.value || "";
+  if (workspace && !el.terminalWorkspaceInput.value) {
+    el.terminalWorkspaceInput.value = workspace;
+  }
+  setTerminalStatus(`状态: ${status}${workspace ? ` | ${workspace}` : ""}`);
+  el.terminalLog.textContent = (session.logs || []).map(formatTerminalLine).join("");
+  el.terminalLog.scrollTop = el.terminalLog.scrollHeight;
+  el.terminalStopButton.disabled = status !== "running";
+}
+
+function formatTerminalLine(line) {
+  if (line.stream === "system") {
+    return `\n[${formatTime(line.time)}] ${line.text}\n`;
+  }
+  if (line.stream === "stdin") {
+    return `\n> ${line.text}`;
+  }
+  return line.text;
+}
+
+function setTerminalStatus(message) {
+  el.terminalStatus.textContent = message;
+}
+
+function startTerminalPolling(id) {
+  if (state.terminalEventSource) {
+    state.terminalEventSource.close();
+    state.terminalEventSource = null;
+  }
+  if (state.terminalPollTimer) return;
+  state.terminalPollTimer = setInterval(async () => {
+    if (!state.terminalSessionId || state.terminalSessionId !== id) {
+      stopTerminalPolling();
+      return;
+    }
+    try {
+      const response = await apiFetch(`/api/terminal/${encodeURIComponent(id)}`);
+      const data = await response.json();
+      renderTerminal(data.session);
+      if (["completed", "failed", "stopped"].includes(data.session.status)) {
+        stopTerminalPolling();
+      }
+    } catch {
+      stopTerminalPolling();
+    }
+  }, 1000);
+}
+
+function stopTerminalPolling() {
+  if (!state.terminalPollTimer) return;
+  clearInterval(state.terminalPollTimer);
+  state.terminalPollTimer = null;
 }
 
 async function loadJobs() {

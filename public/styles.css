@@ -138,6 +138,21 @@ textarea {
   gap: 10px;
 }
 
+.terminal-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.terminal-form {
+  display: grid;
+  gap: 10px;
+}
+
+.terminal-log {
+  min-height: 420px;
+  white-space: pre-wrap;
+}
+
 .jobs-layout,
 .sessions-layout,
 .desktop-layout {
