@@ -20,6 +20,18 @@ This project intentionally does not write to Codex App internal session storage.
 
 Do not commit `.env`, screenshots, runtime files, tunnel logs, or generated tool binaries.
 
+## One-Click Windows Control
+
+On Windows, double-click `CodexRemote-Control.bat` and choose from the menu:
+
+- `1` starts the local service and Cloudflare Quick Tunnel.
+- `2` stops the local service and this project's Quick Tunnel.
+- `3` shows status without printing the token value.
+- `4` opens the saved public URL, or the local URL if no public URL is saved.
+- `5` opens the project folder.
+
+The menu preserves an existing `.env` token. It generates a token only when `.env` is missing or `CODEX_REMOTE_TOKEN` is empty.
+
 ## Start Locally
 
 ```powershell
