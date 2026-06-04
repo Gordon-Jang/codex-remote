@@ -22,7 +22,12 @@ Do not commit `.env`, screenshots, runtime files, tunnel logs, or generated tool
 
 ## One-Click Windows Control
 
-On Windows, double-click `CodexRemote-Control.bat` to start everything directly:
+On Windows, use the two double-click scripts:
+
+- `CodexRemote-Control.bat` starts everything directly.
+- `CodexRemote-Stop.bat` stops the local service and this project's Quick Tunnel.
+
+The start script:
 
 - Starts or reuses the local service.
 - Starts or reuses Cloudflare Quick Tunnel.
@@ -30,7 +35,7 @@ On Windows, double-click `CodexRemote-Control.bat` to start everything directly:
 - Restarts this project's Quick Tunnel if the old `trycloudflare.com` URL expired.
 - Shows the local URL, public URL, and token status without printing the token value.
 
-The script preserves an existing `.env` token. It generates a token only when `.env` is missing or `CODEX_REMOTE_TOKEN` is empty. To stop the service manually, run:
+The scripts preserve an existing `.env` token. The start script generates a token only when `.env` is missing or `CODEX_REMOTE_TOKEN` is empty. To stop from a shell instead of double-clicking:
 
 ```powershell
 .\manage-codex-remote.ps1 -Action stop
